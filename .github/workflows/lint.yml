@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright 2026 Gamunu Balagalla <gamunu.balagalla@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shellcheck:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: shellcheck --version
+      - run: shellcheck -x provision/*.sh scripts/*.sh
+
+  packer-fmt:
+    name: packer fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Packer
+        run: |
+          . ./versions.env
+          cd "${RUNNER_TEMP}"
+          curl -fsSL -o packer.zip \
+            "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip"
+          echo "${PACKER_SHA256_LINUX_AMD64}  packer.zip" | sha256sum --check --strict -
+          unzip -q packer.zip -d bin
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
+      - run: packer fmt -check -diff -recursive packer/

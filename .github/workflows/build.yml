@@ -1,0 +1,207 @@
+# SPDX-FileCopyrightText: Copyright 2026 Gamunu Balagalla <gamunu.balagalla@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: build
+
+# Builds the runner AMIs with Packer, gates them on a vulnerability scan,
+# copies them to every enabled region, records the AMI ids in a release
+# with an attested manifest, and prunes old versions.
+#
+# Only this workflow, on main, in the image-build environment, can assume
+# the AWS role (see bootstrap/github-oidc.yml). The role ARN is an
+# environment secret and every credential is masked, because the logs of
+# this repository are public.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - packer/**
+      - provision/**
+      - scripts/**
+      - versions.env
+      - .github/workflows/build.yml
+
+permissions: {}
+
+concurrency:
+  group: build
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-south-1
+  # Old versions cost snapshot storage in every region.
+  KEEP_VERSIONS: "2"
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - id: version
+        run: echo "version=$(date -u +%Y%m%d.%H%M)" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: version
+    runs-on: ubuntu-latest
+    environment: image-build
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the AWS role
+      security-events: write # upload the Trivy results to code scanning
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      ARCH: ${{ matrix.arch }}
+      IMAGE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assume the build role
+        env:
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: scripts/assume-role.sh "build-${GITHUB_RUN_ID}-${ARCH}"
+
+      - name: Install Packer and Trivy
+        run: |
+          . ./versions.env
+          cd "${RUNNER_TEMP}"
+          curl -fsSL -o packer.zip \
+            "https://releases.hashicorp.com/packer/${PACKER_VERSION}/packer_${PACKER_VERSION}_linux_amd64.zip"
+          echo "${PACKER_SHA256_LINUX_AMD64}  packer.zip" | sha256sum --check --strict -
+          trivy="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -fsSL -o "${trivy}" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/${trivy}"
+          echo "${TRIVY_SHA256_LINUX_X64}  ${trivy}" | sha256sum --check --strict -
+          mkdir -p bin
+          unzip -q packer.zip -d bin
+          tar -xzf "${trivy}" -C bin trivy
+          echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
+
+      # Packer stops before making an AMI when the scan finds a fixable
+      # HIGH or CRITICAL vulnerability, so nothing is copied or released.
+      - name: Build
+        run: |
+          . ./versions.env
+          regions=$(aws ec2 describe-regions \
+            --filters Name=opt-in-status,Values=opt-in-not-required,opted-in \
+            --query "Regions[?RegionName!='${AWS_REGION}'].RegionName" --output json)
+          packer init packer/
+          packer build -color=false \
+            -var "arch=${ARCH}" \
+            -var "region=${AWS_REGION}" \
+            -var "image_version=${IMAGE_VERSION}" \
+            -var "runner_version=${RUNNER_VERSION}" \
+            -var "agent_version=${AGENT_VERSION}" \
+            -var "ami_regions=${regions}" \
+            -var "output_dir=out" \
+            packer/
+
+      - name: Scan results to SARIF and SBOM
+        run: |
+          trivy convert --format sarif --output trivy.sarif "out/scan-${ARCH}.json"
+          trivy convert --format cyclonedx --output "out/sbom-${ARCH}.cdx.json" "out/scan-${ARCH}.json"
+
+      - uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-${{ matrix.arch }}
+          path: |
+            out/packer-manifest-${{ matrix.arch }}.json
+            out/sbom-${{ matrix.arch }}.cdx.json
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the provenance attestation
+      attestations: write # store the attestation
+    env:
+      IMAGE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: image-*
+          merge-multiple: true
+
+      # Packer records the AMIs as "region:ami,region:ami".
+      - name: Manifest
+        run: |
+          . ./versions.env
+          amis() {
+            jq '.builds[-1].artifact_id | split(",") | map(split(":") | {(.[0]): .[1]}) | add' \
+              "packer-manifest-$1.json"
+          }
+          jq -n \
+            --arg version "${IMAGE_VERSION}" \
+            --arg ubuntu "${UBUNTU_RELEASE}" \
+            --arg runner "${RUNNER_VERSION}" \
+            --arg agent "${AGENT_VERSION}" \
+            --argjson amd64 "$(amis amd64)" \
+            --argjson arm64 "$(amis arm64)" \
+            '{version: $version, ubuntu: $ubuntu, runner: $runner, agent: $agent,
+              amis: {amd64: $amd64, arm64: $arm64}}' > manifest.json
+          cat manifest.json
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            manifest.json
+            sbom-*.cdx.json
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "ubuntu26-${IMAGE_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Ubuntu 26.04 ${IMAGE_VERSION}" \
+            --notes "AMI ids per region and architecture are in manifest.json, with a CycloneDX SBOM per architecture. Verify them with gh attestation verify --repo ${GITHUB_REPOSITORY}." \
+            --prerelease \
+            manifest.json sbom-*.cdx.json
+
+  prune:
+    name: Prune old versions
+    needs: release
+    runs-on: ubuntu-latest
+    environment: image-build
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the AWS role
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assume the build role
+        env:
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: scripts/assume-role.sh "prune-${GITHUB_RUN_ID}"
+
+      - name: Prune
+        env:
+          KEEP: ${{ env.KEEP_VERSIONS }}
+        run: scripts/prune.sh
