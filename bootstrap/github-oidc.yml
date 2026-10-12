@@ -1,0 +1,186 @@
+# SPDX-FileCopyrightText: Copyright 2026 Gamunu Balagalla <gamunu.balagalla@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Lets the image build workflow of a GitHub repository build hatchrun
+  runner AMIs with Packer, copy them to every region and prune old ones,
+  through GitHub's OIDC provider instead of stored keys.
+
+Parameters:
+  Repository:
+    Type: String
+    Default: hatchrun/images
+    Description: owner/name of the repository whose build workflow may assume the role.
+  SubjectPrefix:
+    Type: String
+    Default: repo:hatchrun@340033788/images@1411692062
+    Description: >-
+      Start of the repository's immutable OIDC subject, made of the owner
+      and repository ids so a renamed or recreated repository cannot match.
+      Read it from GET /repos/{owner}/{repo}/actions/oidc/customization/sub
+      (sub_claim_prefix).
+  Environment:
+    Type: String
+    Default: image-build
+    Description: >-
+      GitHub environment the build job runs in. Restrict its deployment
+      branches to main.
+  BuilderInstanceTypes:
+    Type: CommaDelimitedList
+    Default: c7i.large,c7g.large
+    Description: The only instance types the role may launch.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: >-
+      ARN of an existing token.actions.githubusercontent.com provider. An
+      account can hold only one; leave empty to create it.
+
+Conditions:
+  CreateProvider: !Equals [!Ref ExistingOidcProviderArn, ""]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  ImageBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: hatchrun-image-build
+      Description: Assumed by the image build workflow on main to build, copy and prune runner AMIs.
+      # A build and the copies to every region run well past an hour.
+      MaxSessionDuration: 14400
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRoleWithWebIdentity
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !GetAtt GitHubOidcProvider.Arn
+                - !Ref ExistingOidcProviderArn
+            # The repository's OIDC subject is customised to carry the
+            # environment and the workflow file (include_claim_keys repo,
+            # context, job_workflow_ref), so only build.yml on main, running
+            # in the protected environment, gets in. Pull requests, forks and
+            # other workflows get a different subject.
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub ${SubjectPrefix}:environment:${Environment}:job_workflow_ref:${Repository}/.github/workflows/build.yml@refs/heads/main
+      Policies:
+        - PolicyName: build-images
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: BaseImage
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/server/*
+              - Sid: Read
+                Effect: Allow
+                Action:
+                  - ec2:DescribeImageAttribute
+                  - ec2:DescribeImages
+                  - ec2:DescribeInstanceStatus
+                  - ec2:DescribeInstanceTypeOfferings
+                  - ec2:DescribeInstances
+                  - ec2:DescribeKeyPairs
+                  - ec2:DescribeRegions
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSnapshots
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeTags
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeVpcs
+                Resource: "*"
+              # A stolen token must not be able to start a mining fleet:
+              # builders launch only in this region, only as the listed
+              # types and only with the build tag.
+              - Sid: LaunchBuilderInstance
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                Condition:
+                  StringEquals:
+                    ec2:InstanceType: !Ref BuilderInstanceTypes
+                  StringLike:
+                    aws:RequestTag/hatchrun:image-build: "*"
+              - Sid: LaunchBuilderResources
+                Effect: Allow
+                Action: ec2:RunInstances
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}::image/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:key-pair/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:volume/*
+              - Sid: OnlyItsBuilders
+                Effect: Allow
+                Action:
+                  - ec2:StopInstances
+                  - ec2:TerminateInstances
+                Resource: !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                Condition:
+                  StringLike:
+                    aws:ResourceTag/hatchrun:image-build: "*"
+              # Packer's throwaway SSH key and the security group that
+              # opens SSH to the CI runner's address for the build.
+              - Sid: TemporaryAccess
+                Effect: Allow
+                Action:
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:CreateKeyPair
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteKeyPair
+                  - ec2:DeleteSecurityGroup
+                Resource:
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:key-pair/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group-rule/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc/*
+              # Packer sets the description of each copy before tagging it.
+              # The call only works on this account's own images.
+              - Sid: MakeImages
+                Effect: Allow
+                Action:
+                  - ec2:CopyImage
+                  - ec2:CreateImage
+                  - ec2:ModifyImageAttribute
+                Resource: "*"
+              - Sid: TagImagesAndBuilders
+                Effect: Allow
+                Action: ec2:CreateTags
+                Resource:
+                  - arn:aws:ec2:*::image/*
+                  - arn:aws:ec2:*::snapshot/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:volume/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:key-pair/*
+                  - !Sub arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:security-group/*
+              # Old versions cost snapshot storage in every region. Only
+              # images and snapshots the build tagged can be deleted.
+              - Sid: Prune
+                Effect: Allow
+                Action:
+                  - ec2:DeleteSnapshot
+                  - ec2:DeregisterImage
+                Resource:
+                  - arn:aws:ec2:*::image/*
+                  - arn:aws:ec2:*::snapshot/*
+                Condition:
+                  StringLike:
+                    aws:ResourceTag/hatchrun:image-version: "*"
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt ImageBuildRole.Arn
