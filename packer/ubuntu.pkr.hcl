@@ -84,6 +84,10 @@ source "amazon-ebs" "ubuntu" {
   ami_name        = local.name
   ami_description = "hatchrun runner, Ubuntu ${var.ubuntu_release} ${var.arch}, runner ${var.runner_version}, hatchrun-agent ${var.agent_version}"
   ami_regions     = var.ami_regions
+  # Public in every region, so users launch the AMI where they run and
+  # never need to copy it. Only the AMI is shared; the snapshots stay
+  # private.
+  ami_groups = ["all"]
 
   # SSH is open to this machine's public IP only, for the length of the
   # build, with a throwaway ed25519 key.

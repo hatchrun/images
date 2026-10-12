@@ -12,7 +12,8 @@ workloads before the AMI is published. Images are rebuilt weekly and
 published as public AMIs with an SBOM and a vulnerability scan. You can
 also build them in your own AWS account with the same pipeline.
 
-Status: early development, no public AMIs yet.
+Status: early development. Public AMIs are published to every region
+enabled by default; each release's `manifest.json` lists their ids.
 
 ## Building
 
