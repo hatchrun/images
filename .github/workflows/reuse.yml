@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright 2026 Gamunu Balagalla <gamunu.balagalla@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: reuse
+
+# Every file must carry a licence and copyright (https://reuse.software).
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  reuse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: pipx run reuse==6.2.0 lint
