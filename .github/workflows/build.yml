@@ -109,6 +109,7 @@ jobs:
             -var "agent_version=${AGENT_VERSION}" \
             -var "ami_regions=${regions}" \
             -var "output_dir=out" \
+            -var 'ami_groups=[]' \
             packer/
 
       - name: Scan results to SARIF and SBOM
@@ -129,9 +130,35 @@ jobs:
             out/sbom-${{ matrix.arch }}.cdx.json
           if-no-files-found: error
 
+  # Packer leaves the AMIs private and tagged. Sharing them here instead of
+  # in Packer means a failed share, such as hitting the account's public
+  # AMI quota, leaves tagged AMIs that prune.sh can remove.
+  publish:
+    name: Make public
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    environment: image-build
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the AWS role
+    env:
+      IMAGE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assume the build role
+        env:
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+        run: scripts/assume-role.sh "publish-${GITHUB_RUN_ID}"
+
+      - name: Share the AMIs
+        run: scripts/publish.sh "${IMAGE_VERSION}"
+
   release:
     name: Release
-    needs: [version, build]
+    needs: [version, publish]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release
