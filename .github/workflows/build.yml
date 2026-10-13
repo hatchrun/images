@@ -220,7 +220,7 @@ jobs:
     name: Marketplace ${{ matrix.arch }}
     needs: [version, release]
     runs-on: ubuntu-latest
-    # The wait gives up after 3 hours.
+    # The waits together give up after 3 hours.
     timeout-minutes: 200
     environment: image-build
     permissions:
@@ -255,9 +255,34 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
         run: scripts/assume-role.sh "marketplace-${GITHUB_RUN_ID}-${ARCH}"
 
+      # A product takes one open change set at a time, so a version still
+      # under scan from an earlier build makes the submission fail with
+      # ResourceInUseException. Wait up to an hour for it and skip this
+      # version when it is still open. Its verdict belonged to the earlier
+      # build, so a failure is a notice here.
+      - name: Wait for earlier versions
+        id: earlier
+        if: env.PRODUCT != ''
+        run: |
+          start=$(date +%s)
+          open=$(scripts/marketplace-open.sh "${PRODUCT}")
+          ids=$(awk '{ print $1 }' <<< "${open}")
+          for change_set in ${ids}; do
+            echo "waiting for change set ${change_set} of an earlier version"
+            scripts/marketplace-wait.sh "${change_set}" 3600 | sed 's/^::error::/::notice::/' || true
+          done
+          open=$(scripts/marketplace-open.sh "${PRODUCT}")
+          if [ -n "${open}" ]; then
+            echo "::warning::an earlier version of ${PRODUCT} is still under review; ${IMAGE_VERSION} is not submitted"
+            echo "free=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "free=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "wait_seconds=$((10800 - ($(date +%s) - start)))" >> "$GITHUB_OUTPUT"
+
       - name: Submit the version
         id: submit
-        if: env.PRODUCT != ''
+        if: env.PRODUCT != '' && steps.earlier.outputs.free == 'true'
         env:
           ACCESS_ROLE_ARN: ${{ secrets.MARKETPLACE_ACCESS_ROLE_ARN }}
         run: |
@@ -272,10 +297,11 @@ jobs:
       # Marketplace validates and scans the version after the submission
       # returns; the job reports its verdict.
       - name: Wait for Marketplace
-        if: env.PRODUCT != ''
+        if: steps.submit.outputs.change_set != ''
         env:
           CHANGE_SET: ${{ steps.submit.outputs.change_set }}
-        run: scripts/marketplace-wait.sh "${CHANGE_SET}"
+          WAIT_SECONDS: ${{ steps.earlier.outputs.wait_seconds }}
+        run: scripts/marketplace-wait.sh "${CHANGE_SET}" "${WAIT_SECONDS}"
 
   prune:
     name: Prune old versions
@@ -295,7 +321,9 @@ jobs:
           ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
         run: scripts/assume-role.sh "prune-${GITHUB_RUN_ID}"
 
+      # AMIs that Marketplace is still scanning are kept.
       - name: Prune
         env:
           KEEP: ${{ env.KEEP_VERSIONS }}
+          PRODUCTS: ${{ vars.MARKETPLACE_PRODUCT_AMD64 }} ${{ vars.MARKETPLACE_PRODUCT_ARM64 }}
         run: scripts/prune.sh
