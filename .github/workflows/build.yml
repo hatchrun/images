@@ -220,6 +220,8 @@ jobs:
     name: Marketplace ${{ matrix.arch }}
     needs: [version, release]
     runs-on: ubuntu-latest
+    # The wait gives up after 3 hours.
+    timeout-minutes: 200
     environment: image-build
     permissions:
       contents: read
@@ -254,6 +256,7 @@ jobs:
         run: scripts/assume-role.sh "marketplace-${GITHUB_RUN_ID}-${ARCH}"
 
       - name: Submit the version
+        id: submit
         if: env.PRODUCT != ''
         env:
           ACCESS_ROLE_ARN: ${{ secrets.MARKETPLACE_ACCESS_ROLE_ARN }}
@@ -263,7 +266,16 @@ jobs:
           ami=$(jq -r --arg region "${AWS_REGION}" \
             '.builds[-1].artifact_id | split(",") | map(split(":")) | map(select(.[0] == $region)) | .[0][1]' \
             "packer-manifest-${ARCH}.json")
-          scripts/marketplace-version.sh "${PRODUCT}" "${ami}" "${ARCH}"
+          change_set=$(scripts/marketplace-version.sh "${PRODUCT}" "${ami}" "${ARCH}")
+          echo "change_set=${change_set}" >> "$GITHUB_OUTPUT"
+
+      # Marketplace validates and scans the version after the submission
+      # returns; the job reports its verdict.
+      - name: Wait for Marketplace
+        if: env.PRODUCT != ''
+        env:
+          CHANGE_SET: ${{ steps.submit.outputs.change_set }}
+        run: scripts/marketplace-wait.sh "${CHANGE_SET}"
 
   prune:
     name: Prune old versions
