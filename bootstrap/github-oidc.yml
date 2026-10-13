@@ -204,6 +204,13 @@ Resources:
                   - aws-marketplace:DescribeChangeSet
                   - aws-marketplace:DescribeEntity
                 Resource: !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/*
+              # Finds the change sets still scanning a product's AMIs, so
+              # the build waits for them and prune keeps their AMIs.
+              # ListChangeSets takes no resource ARN.
+              - Sid: MarketplaceListChangeSets
+                Effect: Allow
+                Action: aws-marketplace:ListChangeSets
+                Resource: "*"
               - Sid: MarketplaceIngestion
                 Effect: Allow
                 Action: iam:PassRole
