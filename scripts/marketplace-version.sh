@@ -14,6 +14,10 @@ set -euo pipefail
 # Reads IMAGE_VERSION, UBUNTU_RELEASE, RUNNER_VERSION, AGENT_VERSION and
 # ACCESS_ROLE_ARN (the role Marketplace ingests the AMI through) from the
 # environment. Set DRY_RUN=1 to validate the request without applying it.
+#
+# Marketplace wants at least one inbound rule for the security group of a
+# one-click launch. A runner needs none, so the rule is SSH from private
+# addresses only, for debugging from inside the VPC.
 
 product=$1
 ami=$2
@@ -62,7 +66,12 @@ change_set=$(jq -n \
             },
             UsageInstructions: "The hatchrun scaler launches this AMI as an ephemeral GitHub Actions runner; it does nothing on its own. Setup: https://github.com/hatchrun/hatchrun#readme",
             RecommendedInstanceType: $instance_type,
-            SecurityGroups: []
+            SecurityGroups: [{
+              IpProtocol: "tcp",
+              FromPort: 22,
+              ToPort: 22,
+              IpRanges: ["10.0.0.0/8"]
+            }]
           }
         }
       }]
