@@ -79,6 +79,23 @@ Each release lists the AMI id of every region and architecture in
 gh attestation verify manifest.json --repo hatchrun/images
 ```
 
+## AWS Marketplace
+
+Each architecture is an AWS Marketplace product, because a product
+version holds a single AMI. Builds run in us-east-1, the only region
+Marketplace takes source AMIs from, and every build is submitted as a
+new version of both products
+([`scripts/marketplace-version.sh`](scripts/marketplace-version.sh)).
+Marketplace copies the AMI into its catalog through the
+`hatchrun-marketplace-ingestion` role, scans it and serves it in every
+region. The build role may add versions and nothing else; creating,
+pricing and publishing the products stays a manual step in the
+Marketplace Management Portal.
+
+The `marketplace` job runs once the `MARKETPLACE_PRODUCT_AMD64` and
+`MARKETPLACE_PRODUCT_ARM64` variables of the `image-build` environment
+hold the product ids.
+
 ## Cost
 
 A build runs a c7i.large or c7g.large for about 20 minutes. What costs
