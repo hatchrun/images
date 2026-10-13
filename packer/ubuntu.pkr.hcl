@@ -156,6 +156,7 @@ build {
       "${path.root}/../provision/30-actions-runner.sh",
       "${path.root}/../provision/40-hatchrun-agent.sh",
       "${path.root}/../provision/50-toolcache.sh",
+      "${path.root}/../provision/60-boot.sh",
       "${path.root}/../provision/80-scan.sh",
     ]
     environment_vars = ["IMAGE_VERSION=${var.image_version}"]

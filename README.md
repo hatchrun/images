@@ -51,6 +51,26 @@ The image has:
 The root volume is 10 GB and unencrypted, so the AMI can be made public.
 Set the size and encryption in your launch template.
 
+## Boot
+
+A runner instance runs one job, so boot time is paid on every job. From
+launch to the job's first step takes about 29 seconds on a t4g.medium
+instance; the Ubuntu cloud image as provisioned took 71.
+
+- cloud-init is disabled. Ubuntu orders it before every regular service
+  and it held the agent back for about 20 seconds. A netplan file runs
+  DHCP on the primary interface, `hatchrun-ssh-key.service` installs
+  the launch key pair for `ubuntu`, and `hatchrun-growroot.service`
+  grows the root file system in the background. Scripts in user data do
+  not run; hatchrun-agent reads user data itself.
+- A volume made from a snapshot fetches each block from S3 on first
+  read. `hatchrun-prefetch.service` reads the runner's and Docker's
+  files many at a time early in boot, which took the runner's start
+  from 16 seconds to 3.
+- Docker starts after the agent, while the runner connects to GitHub,
+  instead of competing with it for the disk.
+- Services a single-job machine never uses are disabled.
+
 ## Security
 
 Before the AMI is made, Trivy scans the builder's own filesystem and is
