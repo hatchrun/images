@@ -34,8 +34,10 @@ concurrency:
 env:
   # AWS Marketplace takes source AMIs only from us-east-1.
   AWS_REGION: us-east-1
-  # Old versions cost snapshot storage in every region.
-  KEEP_VERSIONS: "2"
+  # Old versions cost snapshot storage in every region, and an account
+  # may have only 5 public AMIs per region: the kept version and a new
+  # build take 4.
+  KEEP_VERSIONS: "1"
 
 jobs:
   version:

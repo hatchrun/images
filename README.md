@@ -100,8 +100,10 @@ hold the product ids.
 
 A build runs a c7i.large or c7g.large for about 20 minutes. What costs
 money over time is snapshot storage in every region the AMI is copied
-to, so the workflow keeps the newest two versions per architecture and
+to, so the workflow keeps only the newest version per architecture and
 deregisters the rest with their snapshots ([`scripts/prune.sh`](scripts/prune.sh)).
+AWS also allows an account only 5 public AMIs per region by default,
+and a build adds two.
 An image that fails the scan is never made or copied.
 
 ## Licence
