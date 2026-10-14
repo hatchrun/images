@@ -1,0 +1,50 @@
+# SPDX-FileCopyrightText: Copyright 2026 Gamunu Balagalla <gamunu.balagalla@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: register
+
+# Points hatchrun-cloud's images table at a release's AMIs, which is
+# where its launches take them from. build.yml calls it once the AMIs
+# are public. Run it by hand on main to post a release again; without a
+# version it posts the newest one.
+#
+# hatchrun-cloud trusts the GitHub OIDC token of this workflow's job,
+# on main, in the image-build environment, and nothing else (see
+# crates/cloud/src/images.rs in hatchrun/hatchrun). No secret is
+# involved.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Image version of the release, YYYYMMDD.HHMM
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Image version of the release, YYYYMMDD.HHMM; empty for the newest
+        required: false
+        type: string
+
+permissions: {}
+
+jobs:
+  register:
+    name: Register with hatchrun-cloud
+    runs-on: ubuntu-latest
+    environment: image-build
+    permissions:
+      contents: read # download the release
+      attestations: read # verify the manifest's provenance
+      id-token: write # OIDC token for hatchrun-cloud
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Post the manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: scripts/register.sh "${VERSION}"

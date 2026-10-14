@@ -6,7 +6,8 @@ name: build
 
 # Builds the runner AMIs with Packer, gates them on a vulnerability scan,
 # copies them to every enabled region, records the AMI ids in a release
-# with an attested manifest, and prunes old versions.
+# with an attested manifest, points hatchrun-cloud at them (register.yml)
+# and prunes old versions.
 #
 # Only this workflow, on main, in the image-build environment, can assume
 # the AWS role (see bootstrap/github-oidc.yml). The role ARN is an
@@ -303,9 +304,25 @@ jobs:
           WAIT_SECONDS: ${{ steps.earlier.outputs.wait_seconds }}
         run: scripts/marketplace-wait.sh "${CHANGE_SET}" "${WAIT_SECONDS}"
 
+  # hatchrun-cloud launches runners from the AMIs it holds, so it moves
+  # to this release only now that the AMIs are public.
+  register:
+    name: Register
+    needs: [version, release]
+    permissions:
+      contents: read # download the release
+      attestations: read # verify the manifest's provenance
+      id-token: write # OIDC token for hatchrun-cloud
+    uses: ./.github/workflows/register.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  # Prune keeps the newest version, which hatchrun-cloud now holds. When
+  # register fails, prune does not run, so the AMIs hatchrun-cloud still
+  # points at stay; re-running the failed jobs registers and prunes.
   prune:
     name: Prune old versions
-    needs: release
+    needs: [release, register]
     runs-on: ubuntu-latest
     environment: image-build
     permissions:
