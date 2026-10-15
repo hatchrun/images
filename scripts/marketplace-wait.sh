@@ -12,8 +12,8 @@ set -euo pipefail
 #   marketplace-wait.sh CHANGE_SET_ID [TIMEOUT_SECONDS]
 #
 # A change set still running after TIMEOUT_SECONDS (default 3 hours, less
-# than the build role's 4-hour session) is reported as a warning, not a
-# failure: nothing has gone wrong yet.
+# than the build role's 4-hour session) fails as well: the release needs
+# the AMIs Marketplace serves once it succeeds.
 
 change_set=$1
 timeout=${2:-10800}
@@ -44,8 +44,8 @@ while :; do
     ;;
   esac
   if [ "$(date +%s)" -ge "${deadline}" ]; then
-    echo "::warning::change set ${change_set} is still ${status} after $((timeout / 60)) minutes; follow it in the AWS Marketplace Management Portal"
-    exit 0
+    echo "::error::change set ${change_set} is still ${status} after $((timeout / 60)) minutes; follow it in the AWS Marketplace Management Portal"
+    exit 1
   fi
   sleep "${interval}"
 done

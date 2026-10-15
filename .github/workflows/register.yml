@@ -5,9 +5,9 @@
 name: register
 
 # Points hatchrun-cloud's images table at a release's AMIs, which is
-# where its launches take them from. build.yml calls it once the AMIs
-# are public. Run it by hand on main to post a release again; without a
-# version it posts the newest one.
+# where its launches take them from. build.yml calls it once AWS
+# Marketplace serves the AMIs. Run it by hand on main to post a release
+# again; without a version it posts the newest one.
 #
 # hatchrun-cloud trusts the GitHub OIDC token of this workflow's job,
 # on main, in the image-build environment, and nothing else (see
