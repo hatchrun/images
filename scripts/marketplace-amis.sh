@@ -13,7 +13,8 @@ set -euo pipefail
 #   marketplace-amis.sh PRODUCT_ID VERSION
 #
 # The alias can lag the change set that added the version by a few
-# minutes, so us-east-1 is retried for up to 10 minutes first.
+# minutes, so us-east-1 is retried for up to 10 minutes first; a version
+# Marketplace still does not serve there fails.
 
 product=$1
 version=$2
@@ -24,8 +25,12 @@ alias_in() {
     --query Parameter.Value --output text 2>/dev/null
 }
 
-for _ in $(seq 20); do
+for attempt in $(seq 20); do
   alias_in us-east-1 >/dev/null && break
+  if [ "${attempt}" -eq 20 ]; then
+    echo "::error::${name} is not in us-east-1 after 10 minutes" >&2
+    exit 1
+  fi
   sleep 30
 done
 
@@ -42,8 +47,4 @@ for region in ${regions}; do
   fi
 done
 
-if [ "${amis}" = '{}' ]; then
-  echo "::error::${name} resolves in no region" >&2
-  exit 1
-fi
 jq -S . <<< "${amis}"
