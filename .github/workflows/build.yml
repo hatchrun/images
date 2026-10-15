@@ -7,7 +7,8 @@ name: build
 # Builds the runner AMIs with Packer, gates them on a vulnerability scan,
 # submits them as new versions of the AWS Marketplace products, records
 # the AMIs Marketplace serves in a release with an attested manifest,
-# points hatchrun-cloud at them (register.yml) and prunes old versions.
+# points hatchrun-cloud at them (register.yml), adds new EC2 instance
+# types to the products (instance-types.yml) and prunes old versions.
 #
 # Only this workflow, on main, in the image-build environment, can assume
 # the AWS role (see bootstrap/github-oidc.yml). The role ARN is an
@@ -219,6 +220,17 @@ jobs:
           name: amis-${{ matrix.arch }}
           path: amis-${{ matrix.arch }}.json
           if-no-files-found: error
+
+  # New EC2 types reach the products here. It runs once the versions are
+  # live, since a product takes one open change set at a time, and the
+  # release does not wait for it.
+  instance-types:
+    name: Instance types
+    needs: marketplace
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the instance types role
+    uses: ./.github/workflows/instance-types.yml
 
   release:
     name: Release

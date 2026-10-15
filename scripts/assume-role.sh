@@ -8,6 +8,9 @@
 # account id included, because the logs of this repository are public.
 #
 # Usage: ROLE_ARN=... assume-role.sh SESSION_NAME
+#
+# The credentials last DURATION_SECONDS (default 4 hours), which the
+# role's MaxSessionDuration must allow.
 
 set -euo pipefail
 
@@ -23,7 +26,7 @@ credentials=$(aws sts assume-role-with-web-identity \
   --role-arn "${ROLE_ARN}" \
   --role-session-name "${session}" \
   --web-identity-token "${token}" \
-  --duration-seconds 14400 \
+  --duration-seconds "${DURATION_SECONDS:-14400}" \
   --query Credentials --output json)
 for key in AccessKeyId SecretAccessKey SessionToken; do
   echo "::add-mask::$(jq -r ".${key}" <<<"${credentials}")"
