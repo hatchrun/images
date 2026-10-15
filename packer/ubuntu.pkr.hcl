@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Ubuntu runner AMI. Packer boots the current Ubuntu cloud image, runs
-# provision/*.sh over SSH, gates on the vulnerability scan, makes the AMI
-# and copies it to ami_regions.
+# provision/*.sh over SSH, gates on the vulnerability scan and makes a
+# private AMI in the build region. AWS Marketplace copies it from there
+# and serves it in every region.
 
 packer {
   required_version = "= 1.16.1"
@@ -29,12 +30,6 @@ variable "region" {
   default = "ap-south-1"
 }
 
-variable "ami_regions" {
-  type        = list(string)
-  default     = []
-  description = "Regions to copy the AMI to, besides the build region."
-}
-
 variable "image_version" {
   type        = string
   description = "Version that names the image, such as 20261012.1739."
@@ -56,12 +51,6 @@ variable "agent_version" {
 variable "subnet_id" {
   type    = string
   default = ""
-}
-
-variable "ami_groups" {
-  type        = list(string)
-  default     = ["all"]
-  description = "Groups the AMI is shared with. Pass [] to keep it private to the building account."
 }
 
 variable "output_dir" {
@@ -89,11 +78,6 @@ source "amazon-ebs" "ubuntu" {
   subnet_id       = var.subnet_id
   ami_name        = local.name
   ami_description = "hatchrun runner, Ubuntu ${var.ubuntu_release} ${var.arch}, runner ${var.runner_version}, hatchrun-agent ${var.agent_version}"
-  ami_regions     = var.ami_regions
-  # Public in every region by default, so users launch the AMI where they
-  # run and never need to copy it. Only the AMI is shared; the snapshots
-  # stay private.
-  ami_groups = var.ami_groups
 
   # SSH is open to this machine's public IP only, for the length of the
   # build, with a throwaway ed25519 key.
@@ -109,7 +93,7 @@ source "amazon-ebs" "ubuntu" {
     http_put_response_hop_limit = 1
   }
 
-  # Unencrypted so the AMI can be made public. Launch templates encrypt
+  # Unencrypted so AWS Marketplace can copy it. Launch templates encrypt
   # each runner's copy and pick its size.
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
@@ -170,7 +154,7 @@ build {
   }
 
   # A fixable HIGH or CRITICAL vulnerability stops the build here, before
-  # any AMI exists or is copied.
+  # any AMI exists.
   provisioner "shell-local" {
     inline = ["${path.root}/../scripts/check-scan.sh ${var.output_dir}/scan-${var.arch}.json"]
   }

@@ -5,9 +5,9 @@
 name: build
 
 # Builds the runner AMIs with Packer, gates them on a vulnerability scan,
-# copies them to every enabled region, records the AMI ids in a release
-# with an attested manifest, points hatchrun-cloud at them (register.yml)
-# and prunes old versions.
+# submits them as new versions of the AWS Marketplace products, records
+# the AMIs Marketplace serves in a release with an attested manifest,
+# points hatchrun-cloud at them (register.yml) and prunes old versions.
 #
 # Only this workflow, on main, in the image-build environment, can assume
 # the AWS role (see bootstrap/github-oidc.yml). The role ARN is an
@@ -35,9 +35,8 @@ concurrency:
 env:
   # AWS Marketplace takes source AMIs only from us-east-1.
   AWS_REGION: us-east-1
-  # Old versions cost snapshot storage in every region, and an account
-  # may have only 5 public AMIs per region: the kept version and a new
-  # build take 4.
+  # Marketplace keeps its own copy of each version, so a source AMI is
+  # only needed until its scan is done.
   KEEP_VERSIONS: "1"
 
 jobs:
@@ -94,13 +93,10 @@ jobs:
           echo "${RUNNER_TEMP}/bin" >> "$GITHUB_PATH"
 
       # Packer stops before making an AMI when the scan finds a fixable
-      # HIGH or CRITICAL vulnerability, so nothing is copied or released.
+      # HIGH or CRITICAL vulnerability, so nothing is submitted or released.
       - name: Build
         run: |
           . ./versions.env
-          regions=$(aws ec2 describe-regions \
-            --filters Name=opt-in-status,Values=opt-in-not-required,opted-in \
-            --query "Regions[?RegionName!='${AWS_REGION}'].RegionName" --output json)
           packer init packer/
           packer build -color=false \
             -var "arch=${ARCH}" \
@@ -108,9 +104,7 @@ jobs:
             -var "image_version=${IMAGE_VERSION}" \
             -var "runner_version=${RUNNER_VERSION}" \
             -var "agent_version=${AGENT_VERSION}" \
-            -var "ami_regions=${regions}" \
             -var "output_dir=out" \
-            -var 'ami_groups=[]' \
             packer/
 
       - name: Scan results to SARIF and SBOM
@@ -131,35 +125,104 @@ jobs:
             out/sbom-${{ matrix.arch }}.cdx.json
           if-no-files-found: error
 
-  # Packer leaves the AMIs private and tagged. Sharing them here instead of
-  # in Packer means a failed share, such as hitting the account's public
-  # AMI quota, leaves tagged AMIs that prune.sh can remove.
-  publish:
-    name: Make public
+  # Each architecture is its own Marketplace product, since a product
+  # version holds a single AMI. Marketplace copies the AMI, scans it and
+  # serves it in every region; the job records those AMIs for the
+  # release.
+  marketplace:
+    name: Marketplace ${{ matrix.arch }}
     needs: [version, build]
     runs-on: ubuntu-latest
+    # The waits together give up after 3 hours.
+    timeout-minutes: 200
     environment: image-build
     permissions:
       contents: read
       id-token: write # OIDC token for the AWS role
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            product_var: MARKETPLACE_PRODUCT_AMD64
+          - arch: arm64
+            product_var: MARKETPLACE_PRODUCT_ARM64
     env:
+      ARCH: ${{ matrix.arch }}
       IMAGE_VERSION: ${{ needs.version.outputs.version }}
+      PRODUCT: ${{ vars[matrix.product_var] }}
     steps:
+      - name: Product id
+        run: |
+          if [ -z "${PRODUCT}" ]; then
+            echo "::error::${{ matrix.product_var }} is not set in the image-build environment"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image-${{ matrix.arch }}
+
       - name: Assume the build role
         env:
           ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-        run: scripts/assume-role.sh "publish-${GITHUB_RUN_ID}"
+        run: scripts/assume-role.sh "marketplace-${GITHUB_RUN_ID}-${ARCH}"
 
-      - name: Share the AMIs
-        run: scripts/publish.sh "${IMAGE_VERSION}"
+      # A product takes one open change set at a time, so a version still
+      # under scan from an earlier build makes the submission fail with
+      # ResourceInUseException. Wait up to an hour for it. Its verdict
+      # belonged to the earlier build, so a failure is a notice here.
+      - name: Wait for earlier versions
+        id: earlier
+        run: |
+          start=$(date +%s)
+          open=$(scripts/marketplace-open.sh "${PRODUCT}")
+          ids=$(awk '{ print $1 }' <<< "${open}")
+          for change_set in ${ids}; do
+            echo "waiting for change set ${change_set} of an earlier version"
+            scripts/marketplace-wait.sh "${change_set}" 3600 | sed 's/^::error::/::notice::/' || true
+          done
+          if [ -n "$(scripts/marketplace-open.sh "${PRODUCT}")" ]; then
+            echo "::error::an earlier version of ${PRODUCT} is still under review; ${IMAGE_VERSION} is not submitted"
+            exit 1
+          fi
+          echo "wait_seconds=$((10800 - ($(date +%s) - start)))" >> "$GITHUB_OUTPUT"
+
+      - name: Submit the version
+        id: submit
+        env:
+          ACCESS_ROLE_ARN: ${{ secrets.MARKETPLACE_ACCESS_ROLE_ARN }}
+        run: |
+          . ./versions.env
+          export UBUNTU_RELEASE RUNNER_VERSION AGENT_VERSION
+          ami=$(jq -r '.builds[-1].artifact_id | split(":")[1]' "packer-manifest-${ARCH}.json")
+          change_set=$(scripts/marketplace-version.sh "${PRODUCT}" "${ami}" "${ARCH}")
+          echo "change_set=${change_set}" >> "$GITHUB_OUTPUT"
+
+      # Marketplace validates and scans the version after the submission
+      # returns; the job reports its verdict.
+      - name: Wait for Marketplace
+        env:
+          CHANGE_SET: ${{ steps.submit.outputs.change_set }}
+          WAIT_SECONDS: ${{ steps.earlier.outputs.wait_seconds }}
+        run: scripts/marketplace-wait.sh "${CHANGE_SET}" "${WAIT_SECONDS}"
+
+      - name: AMIs per region
+        run: scripts/marketplace-amis.sh "${PRODUCT}" "${IMAGE_VERSION}" > "amis-${ARCH}.json"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: amis-${{ matrix.arch }}
+          path: amis-${{ matrix.arch }}.json
+          if-no-files-found: error
 
   release:
     name: Release
-    needs: [version, publish]
+    needs: [version, marketplace]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the release
@@ -174,24 +237,18 @@ jobs:
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: image-*
           merge-multiple: true
 
-      # Packer records the AMIs as "region:ami,region:ami".
       - name: Manifest
         run: |
           . ./versions.env
-          amis() {
-            jq '.builds[-1].artifact_id | split(",") | map(split(":") | {(.[0]): .[1]}) | add' \
-              "packer-manifest-$1.json"
-          }
           jq -n \
             --arg version "${IMAGE_VERSION}" \
             --arg ubuntu "${UBUNTU_RELEASE}" \
             --arg runner "${RUNNER_VERSION}" \
             --arg agent "${AGENT_VERSION}" \
-            --argjson amd64 "$(amis amd64)" \
-            --argjson arm64 "$(amis arm64)" \
+            --argjson amd64 "$(cat amis-amd64.json)" \
+            --argjson arm64 "$(cat amis-arm64.json)" \
             '{version: $version, ubuntu: $ubuntu, runner: $runner, agent: $agent,
               amis: {amd64: $amd64, arm64: $arm64}}' > manifest.json
           cat manifest.json
@@ -214,98 +271,8 @@ jobs:
             --prerelease \
             manifest.json sbom-*.cdx.json
 
-  # Each architecture is its own Marketplace product, since a product
-  # version holds a single AMI. The job does nothing until the product ids
-  # are set as variables of the image-build environment.
-  marketplace:
-    name: Marketplace ${{ matrix.arch }}
-    needs: [version, release]
-    runs-on: ubuntu-latest
-    # The waits together give up after 3 hours.
-    timeout-minutes: 200
-    environment: image-build
-    permissions:
-      contents: read
-      id-token: write # OIDC token for the AWS role
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            product_var: MARKETPLACE_PRODUCT_AMD64
-          - arch: arm64
-            product_var: MARKETPLACE_PRODUCT_ARM64
-    env:
-      ARCH: ${{ matrix.arch }}
-      IMAGE_VERSION: ${{ needs.version.outputs.version }}
-      PRODUCT: ${{ vars[matrix.product_var] }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: env.PRODUCT != ''
-        with:
-          persist-credentials: false
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: env.PRODUCT != ''
-        with:
-          name: image-${{ matrix.arch }}
-
-      - name: Assume the build role
-        if: env.PRODUCT != ''
-        env:
-          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-        run: scripts/assume-role.sh "marketplace-${GITHUB_RUN_ID}-${ARCH}"
-
-      # A product takes one open change set at a time, so a version still
-      # under scan from an earlier build makes the submission fail with
-      # ResourceInUseException. Wait up to an hour for it and skip this
-      # version when it is still open. Its verdict belonged to the earlier
-      # build, so a failure is a notice here.
-      - name: Wait for earlier versions
-        id: earlier
-        if: env.PRODUCT != ''
-        run: |
-          start=$(date +%s)
-          open=$(scripts/marketplace-open.sh "${PRODUCT}")
-          ids=$(awk '{ print $1 }' <<< "${open}")
-          for change_set in ${ids}; do
-            echo "waiting for change set ${change_set} of an earlier version"
-            scripts/marketplace-wait.sh "${change_set}" 3600 | sed 's/^::error::/::notice::/' || true
-          done
-          open=$(scripts/marketplace-open.sh "${PRODUCT}")
-          if [ -n "${open}" ]; then
-            echo "::warning::an earlier version of ${PRODUCT} is still under review; ${IMAGE_VERSION} is not submitted"
-            echo "free=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "free=true" >> "$GITHUB_OUTPUT"
-          fi
-          echo "wait_seconds=$((10800 - ($(date +%s) - start)))" >> "$GITHUB_OUTPUT"
-
-      - name: Submit the version
-        id: submit
-        if: env.PRODUCT != '' && steps.earlier.outputs.free == 'true'
-        env:
-          ACCESS_ROLE_ARN: ${{ secrets.MARKETPLACE_ACCESS_ROLE_ARN }}
-        run: |
-          . ./versions.env
-          export UBUNTU_RELEASE RUNNER_VERSION AGENT_VERSION
-          ami=$(jq -r --arg region "${AWS_REGION}" \
-            '.builds[-1].artifact_id | split(",") | map(split(":")) | map(select(.[0] == $region)) | .[0][1]' \
-            "packer-manifest-${ARCH}.json")
-          change_set=$(scripts/marketplace-version.sh "${PRODUCT}" "${ami}" "${ARCH}")
-          echo "change_set=${change_set}" >> "$GITHUB_OUTPUT"
-
-      # Marketplace validates and scans the version after the submission
-      # returns; the job reports its verdict.
-      - name: Wait for Marketplace
-        if: steps.submit.outputs.change_set != ''
-        env:
-          CHANGE_SET: ${{ steps.submit.outputs.change_set }}
-          WAIT_SECONDS: ${{ steps.earlier.outputs.wait_seconds }}
-        run: scripts/marketplace-wait.sh "${CHANGE_SET}" "${WAIT_SECONDS}"
-
   # hatchrun-cloud launches runners from the AMIs it holds, so it moves
-  # to this release only now that the AMIs are public.
+  # to this release only now that Marketplace serves them.
   register:
     name: Register
     needs: [version, release]
@@ -317,9 +284,10 @@ jobs:
     with:
       version: ${{ needs.version.outputs.version }}
 
-  # Prune keeps the newest version, which hatchrun-cloud now holds. When
-  # register fails, prune does not run, so the AMIs hatchrun-cloud still
-  # points at stay; re-running the failed jobs registers and prunes.
+  # Runners launch from Marketplace's copies, so the source AMIs here
+  # only cost snapshot storage once their scan is done. Prune keeps the
+  # newest version and runs last, so a failed build leaves its AMI for a
+  # re-run.
   prune:
     name: Prune old versions
     needs: [release, register]

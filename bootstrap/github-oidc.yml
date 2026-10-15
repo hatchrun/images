@@ -5,8 +5,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Lets the image build workflow of a GitHub repository build hatchrun
-  runner AMIs with Packer, copy them to every region and prune old ones,
-  through GitHub's OIDC provider instead of stored keys.
+  runner AMIs with Packer, submit them to AWS Marketplace and prune old
+  ones, through GitHub's OIDC provider instead of stored keys.
 
 Parameters:
   Repository:
@@ -59,8 +59,8 @@ Resources:
     Type: AWS::IAM::Role
     Properties:
       RoleName: hatchrun-image-build
-      Description: Assumed by the image build workflow on main to build, copy and prune runner AMIs.
-      # A build and the copies to every region run well past an hour.
+      Description: Assumed by the image build workflow on main to build, submit and prune runner AMIs.
+      # The Marketplace scan of a new version can take hours.
       MaxSessionDuration: 14400
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
@@ -90,6 +90,12 @@ Resources:
                 Effect: Allow
                 Action: ssm:GetParameter
                 Resource: arn:aws:ssm:*::parameter/aws/service/canonical/ubuntu/server/*
+              # The AMI Marketplace serves for a version in each region,
+              # recorded in the release.
+              - Sid: MarketplaceAmis
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource: arn:aws:ssm:*::parameter/aws/service/marketplace/*
               - Sid: Read
                 Effect: Allow
                 Action:
@@ -153,36 +159,31 @@ Resources:
                   - !Sub arn:aws:ec2:${BuildRegion}:${AWS::AccountId}:security-group/*
                   - !Sub arn:aws:ec2:${BuildRegion}:${AWS::AccountId}:security-group-rule/*
                   - !Sub arn:aws:ec2:${BuildRegion}:${AWS::AccountId}:vpc/*
-              # Packer sets the description of each copy before tagging it.
-              # The call only works on this account's own images.
               - Sid: MakeImages
                 Effect: Allow
-                Action:
-                  - ec2:CopyImage
-                  - ec2:CreateImage
-                  - ec2:ModifyImageAttribute
+                Action: ec2:CreateImage
                 Resource: "*"
               - Sid: TagImagesAndBuilders
                 Effect: Allow
                 Action: ec2:CreateTags
                 Resource:
-                  - arn:aws:ec2:*::image/*
-                  - arn:aws:ec2:*::snapshot/*
+                  - !Sub arn:aws:ec2:${BuildRegion}::image/*
+                  - !Sub arn:aws:ec2:${BuildRegion}::snapshot/*
                   - !Sub arn:aws:ec2:${BuildRegion}:${AWS::AccountId}:instance/*
                   - !Sub arn:aws:ec2:${BuildRegion}:${AWS::AccountId}:volume/*
                   - !Sub arn:aws:ec2:${BuildRegion}:${AWS::AccountId}:network-interface/*
                   - !Sub arn:aws:ec2:${BuildRegion}:${AWS::AccountId}:key-pair/*
                   - !Sub arn:aws:ec2:${BuildRegion}:${AWS::AccountId}:security-group/*
-              # Old versions cost snapshot storage in every region. Only
-              # images and snapshots the build tagged can be deleted.
+              # Old versions cost snapshot storage. Only images and
+              # snapshots the build tagged can be deleted.
               - Sid: Prune
                 Effect: Allow
                 Action:
                   - ec2:DeleteSnapshot
                   - ec2:DeregisterImage
                 Resource:
-                  - arn:aws:ec2:*::image/*
-                  - arn:aws:ec2:*::snapshot/*
+                  - !Sub arn:aws:ec2:${BuildRegion}::image/*
+                  - !Sub arn:aws:ec2:${BuildRegion}::snapshot/*
                 Condition:
                   StringLike:
                     aws:ResourceTag/hatchrun:image-version: "*"
