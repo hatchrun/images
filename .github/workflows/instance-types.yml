@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright 2026 Gamunu Balagalla <gamunu.balagalla@gmail.com>
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: instance-types
+
+# Keeps every current runner instance type on both AWS Marketplace
+# products, each with a $0 hourly price on the product's free offer.
+# EC2 launches a Marketplace AMI only on the types its product lists, and
+# new EC2 types are not added by themselves. build.yml calls it once the
+# new versions are live; run it by hand on main to catch up between
+# builds.
+#
+# It has its own role (see bootstrap/github-oidc.yml), because adding a
+# type means rewriting the offer's prices. The build role, which runs
+# Packer and the scanners, cannot touch prices, and this one can only add
+# types and dimensions and price the two offers.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  instance-types:
+    name: Instance types ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    environment: image-build
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write # OIDC token for the AWS role
+    # A product takes one open change set at a time.
+    concurrency:
+      group: instance-types-${{ matrix.arch }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            product_var: MARKETPLACE_PRODUCT_AMD64
+            offer_var: MARKETPLACE_OFFER_AMD64
+          - arch: arm64
+            product_var: MARKETPLACE_PRODUCT_ARM64
+            offer_var: MARKETPLACE_OFFER_ARM64
+    env:
+      ARCH: ${{ matrix.arch }}
+      PRODUCT: ${{ vars[matrix.product_var] }}
+      OFFER: ${{ vars[matrix.offer_var] }}
+    steps:
+      - name: Product and offer ids
+        run: |
+          if [ -z "${PRODUCT}" ] || [ -z "${OFFER}" ]; then
+            echo "::error::${{ matrix.product_var }} and ${{ matrix.offer_var }} must be set in the image-build environment"
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Assume the instance types role
+        env:
+          ROLE_ARN: ${{ secrets.AWS_INSTANCE_TYPES_ROLE_ARN }}
+          DURATION_SECONDS: "3600"
+        run: scripts/assume-role.sh "instance-types-${GITHUB_RUN_ID}-${ARCH}"
+
+      - name: Add new instance types
+        run: scripts/marketplace-types.sh "${PRODUCT}" "${OFFER}" "${ARCH}"

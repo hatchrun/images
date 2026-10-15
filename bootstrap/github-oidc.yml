@@ -5,8 +5,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Lets the image build workflow of a GitHub repository build hatchrun
-  runner AMIs with Packer, submit them to AWS Marketplace and prune old
-  ones, through GitHub's OIDC provider instead of stored keys.
+  runner AMIs with Packer, submit them to AWS Marketplace, keep the
+  products' instance types current and prune old AMIs, through GitHub's
+  OIDC provider instead of stored keys.
 
 Parameters:
   Repository:
@@ -37,6 +38,22 @@ Parameters:
     Type: CommaDelimitedList
     Default: c7i.large,c7g.large
     Description: The only instance types the role may launch.
+  MarketplaceProductAmd64:
+    Type: String
+    Default: prod-wwbmhdzdrpsaw
+    Description: AWS Marketplace product of the amd64 runner image.
+  MarketplaceProductArm64:
+    Type: String
+    Default: prod-qkoubg5foywny
+    Description: AWS Marketplace product of the arm64 runner image.
+  MarketplaceOfferAmd64:
+    Type: String
+    Default: offer-2luhxsba246a4
+    Description: Free public offer of the amd64 product.
+  MarketplaceOfferArm64:
+    Type: String
+    Default: offer-xpdprhpcyd4r2
+    Description: Free public offer of the arm64 product.
   ExistingOidcProviderArn:
     Type: String
     Default: ""
@@ -231,6 +248,86 @@ Resources:
                   StringEquals:
                     iam:PassedToService: assets.marketplace.amazonaws.com
 
+  # Adds new EC2 instance types to the Marketplace products. Each type
+  # needs an hourly dimension and a price on the product's offer, and
+  # the offer's rate card is replaced as a whole, so this role can set
+  # any price on the two offers. IAM cannot hold it to $0. It is kept
+  # apart from the build role, whose jobs run Packer, provisioning and
+  # the scanners: only instance-types.yml, which runs the AWS CLI and jq,
+  # gets it.
+  InstanceTypesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: hatchrun-marketplace-instance-types
+      Description: Assumed by the instance types workflow on main to add new EC2 types to the runner image products.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRoleWithWebIdentity
+            Principal:
+              Federated: !If
+                - CreateProvider
+                - !GetAtt GitHubOidcProvider.Arn
+                - !Ref ExistingOidcProviderArn
+            # build.yml calls instance-types.yml, so the subject names the
+            # called workflow whether it runs from a build or by hand.
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub: !Sub ${SubjectPrefix}:environment:${Environment}:job_workflow_ref:${Repository}/.github/workflows/instance-types.yml@refs/heads/main
+      Policies:
+        - PolicyName: marketplace-instance-types
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InstanceTypes
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeRegions
+                Resource: "*"
+              - Sid: AddTypesAndDimensions
+                Effect: Allow
+                Action: aws-marketplace:StartChangeSet
+                Resource:
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/AmiProduct/${MarketplaceProductAmd64}
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/AmiProduct/${MarketplaceProductArm64}
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/ChangeSet/*
+                Condition:
+                  StringEquals:
+                    catalog:ChangeType:
+                      - AddInstanceTypes
+                      - AddDimensions
+              - Sid: PriceDimensions
+                Effect: Allow
+                Action: aws-marketplace:StartChangeSet
+                Resource:
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/Offer/${MarketplaceOfferAmd64}
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/Offer/${MarketplaceOfferArm64}
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/ChangeSet/*
+                Condition:
+                  StringEquals:
+                    catalog:ChangeType: UpdatePricingTerms
+              - Sid: MarketplaceRead
+                Effect: Allow
+                Action: aws-marketplace:DescribeEntity
+                Resource:
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/AmiProduct/${MarketplaceProductAmd64}
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/AmiProduct/${MarketplaceProductArm64}
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/Offer/${MarketplaceOfferAmd64}
+                  - !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/Offer/${MarketplaceOfferArm64}
+              - Sid: MarketplaceChangeSets
+                Effect: Allow
+                Action: aws-marketplace:DescribeChangeSet
+                Resource: !Sub arn:aws:aws-marketplace:us-east-1:${AWS::AccountId}:AWSMarketplace/ChangeSet/*
+              # Finds the types Marketplace refused lately. ListChangeSets
+              # takes no resource ARN.
+              - Sid: MarketplaceListChangeSets
+                Effect: Allow
+                Action: aws-marketplace:ListChangeSets
+                Resource: "*"
+
   # AWS Marketplace copies each new version's AMI into its own catalog
   # and scans it, through this role.
   MarketplaceIngestionRole:
@@ -251,5 +348,7 @@ Resources:
 Outputs:
   RoleArn:
     Value: !GetAtt ImageBuildRole.Arn
+  InstanceTypesRoleArn:
+    Value: !GetAtt InstanceTypesRole.Arn
   MarketplaceIngestionRoleArn:
     Value: !GetAtt MarketplaceIngestionRole.Arn
