@@ -231,6 +231,9 @@ jobs:
       contents: read
       id-token: write # OIDC token for the instance types role
     uses: ./.github/workflows/instance-types.yml
+    # A called workflow sees no secrets, its environment's included,
+    # unless the caller passes them.
+    secrets: inherit
 
   release:
     name: Release
