@@ -164,11 +164,16 @@ Resources:
                 Action: ec2:CreateImage
                 Resource: "*"
               # Packer sets the AMI's description after creating it. The
-              # call only works on this account's own images.
+              # call only works on this account's own images, and the
+              # condition refuses a launch permission change, so the role
+              # cannot share an image.
               - Sid: SetImageDescription
                 Effect: Allow
                 Action: ec2:ModifyImageAttribute
                 Resource: !Sub arn:aws:ec2:${BuildRegion}::image/*
+                Condition:
+                  StringLike:
+                    ec2:Attribute/Description: "*"
               - Sid: TagImagesAndBuilders
                 Effect: Allow
                 Action: ec2:CreateTags
