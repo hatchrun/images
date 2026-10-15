@@ -163,6 +163,12 @@ Resources:
                 Effect: Allow
                 Action: ec2:CreateImage
                 Resource: "*"
+              # Packer sets the AMI's description after creating it. The
+              # call only works on this account's own images.
+              - Sid: SetImageDescription
+                Effect: Allow
+                Action: ec2:ModifyImageAttribute
+                Resource: !Sub arn:aws:ec2:${BuildRegion}::image/*
               - Sid: TagImagesAndBuilders
                 Effect: Allow
                 Action: ec2:CreateTags
