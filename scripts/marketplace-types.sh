@@ -101,10 +101,11 @@ fi
 for ((attempt = 1; attempt <= attempts; attempt++)); do
   entity=$(catalog describe-entity --entity-id "${product}" | jq .DetailsDocument)
   rates=$(catalog describe-entity --entity-id "${offer}" |
-    jq '[.DetailsDocument.Terms[] | select(.Type == "UsageBasedPricingTerm") | .RateCards[].RateCard[].DimensionKey]')
+    jq '[.DetailsDocument.Terms[] | select(.Type == "UsageBasedPricingTerm") | .RateCards[].RateCard[] | {key: .DimensionKey, price: (.Price | tonumber)}]')
 
   # The offer's rate card replaces the old one, so it lists every
-  # dimension, old and new.
+  # dimension, old and new. A card that misses a dimension or charges
+  # for one is rewritten.
   plan=$(jq -n \
     --argjson wanted "${wanted}" \
     --argjson rejected "${rejected}" \
@@ -116,7 +117,7 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
     | (($available + $types | unique) - $dimensions | sort) as $new_dimensions
     | ($dimensions + $new_dimensions | unique) as $priced
     | {types: $types, dimensions: $new_dimensions, priced: $priced,
-       reprice: (($rates | unique) != $priced)}')
+       reprice: (([$rates[].key] | unique) != $priced or any($rates[]; .price != 0))}')
 
   types=$(jq -r '.types | join(" ")' <<< "${plan}")
   dimensions=$(jq -r '.dimensions | join(" ")' <<< "${plan}")
