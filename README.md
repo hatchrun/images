@@ -156,4 +156,5 @@ by fingerprint, with a comment saying why.
 
 ## Licence
 
-Apache License, Version 2.0. See [LICENSE](LICENSE).
+GNU Affero General Public License, version 3 only (AGPL-3.0-only). See
+[LICENSE](LICENSE).

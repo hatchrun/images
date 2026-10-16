@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026 Gamunu Balagalla <gamunu.balagalla@gmail.com>
 #
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-only
 
 # Ubuntu runner AMI. Packer boots the current Ubuntu cloud image, runs
 # provision/*.sh over SSH, gates on the vulnerability scan and makes a
