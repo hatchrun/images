@@ -43,14 +43,20 @@ catalog() {
   aws marketplace-catalog "$@" --region us-east-1 --catalog AWSMarketplace --output json
 }
 
-# Prints the types an INVALID_INSTANCE_TYPES error of a described change
-# set names, one per line. The message reads
-# "Following instance types '[i8g.48xlarge, r9g.medium]' are not valid".
+# The types one error of a change set refuses. Marketplace names them in
+# either of two ways, depending on which change it checks first:
+#   INVALID_INSTANCE_TYPES: Following instance types '[i8g.48xlarge, r9g.medium]' are not valid
+#   INVALID_INPUT: Remove invalid dimension key 'i8g.48xlarge' for Metered dimension.
+refused='def refused:
+  if .ErrorCode == "INVALID_INSTANCE_TYPES" then
+    .ErrorMessage | capture("\\[(?<types>[^]]*)\\]").types | split(", ")[]
+  elif .ErrorCode == "INVALID_INPUT" then
+    .ErrorMessage | capture("^Remove invalid dimension key \\x27(?<type>[^\\x27]+)\\x27").type
+  else empty end;'
+
+# Prints the types a described change set refused, one per line.
 invalid_types() {
-  jq -r '.ChangeSet[].ErrorDetailList[]?
-    | select(.ErrorCode == "INVALID_INSTANCE_TYPES")
-    | .ErrorMessage | capture("\\[(?<types>[^]]*)\\]").types
-    | split(", ")[]'
+  jq -r "${refused}"' .ChangeSet[].ErrorDetailList[]? | refused'
 }
 
 # Prints the runner types of one region, one per line.
@@ -70,7 +76,8 @@ region_types() {
 }
 
 dir=$(mktemp -d)
-trap 'rm -rf "${dir}"' EXIT
+work=$(mktemp -d)
+trap 'rm -rf "${dir}" "${work}"' EXIT
 pids=()
 for region in $(aws ec2 describe-regions --region us-east-1 --query 'Regions[].RegionName' --output text); do
   region_types "${region}" > "${dir}/${region}" &
@@ -99,9 +106,12 @@ if [ "$(jq length <<< "${rejected}")" -gt 0 ]; then
 fi
 
 for ((attempt = 1; attempt <= attempts; attempt++)); do
-  entity=$(catalog describe-entity --entity-id "${product}" | jq .DetailsDocument)
-  rates=$(catalog describe-entity --entity-id "${offer}" |
-    jq '[.DetailsDocument.Terms[] | select(.Type == "UsageBasedPricingTerm") | .RateCards[].RateCard[] | {key: .DimensionKey, price: (.Price | tonumber)}]')
+  # The product's document runs past the 128 KiB Linux allows one
+  # argument, so the documents go to jq as files.
+  catalog describe-entity --entity-id "${product}" | jq .DetailsDocument > "${work}/entity.json"
+  catalog describe-entity --entity-id "${offer}" |
+    jq '[.DetailsDocument.Terms[] | select(.Type == "UsageBasedPricingTerm") | .RateCards[].RateCard[] | {key: .DimensionKey, price: (.Price | tonumber)}]' \
+      > "${work}/rates.json"
 
   # The offer's rate card replaces the old one, so it lists every
   # dimension, old and new. A card that misses a dimension or charges
@@ -109,9 +119,10 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
   plan=$(jq -n \
     --argjson wanted "${wanted}" \
     --argjson rejected "${rejected}" \
-    --argjson entity "${entity}" \
-    --argjson rates "${rates}" \
-    '($entity.Compatibility.AvailableInstanceTypes // []) as $available
+    --slurpfile entity "${work}/entity.json" \
+    --slurpfile rates "${work}/rates.json" \
+    '$entity[0] as $entity | $rates[0] as $rates
+    | ($entity.Compatibility.AvailableInstanceTypes // []) as $available
     | ([$entity.Dimensions[]?.Key]) as $dimensions
     | ($wanted - $available - $rejected | sort) as $types
     | (($available + $types | unique) - $dimensions | sort) as $new_dimensions
@@ -128,7 +139,7 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
   echo "adding types: ${types:-none}"
   echo "adding dimensions: ${dimensions:-none}"
 
-  change_set=$(jq -c --arg product "${product}" --arg offer "${offer}" \
+  jq -c --arg product "${product}" --arg offer "${offer}" \
     '[if (.types | length) > 0 then {
        ChangeType: "AddInstanceTypes",
        Entity: {Type: "AmiProduct@1.0", Identifier: $product},
@@ -150,16 +161,16 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
            RateCards: [{RateCard: [.priced[] | {DimensionKey: ., Price: "0.00"}]}]
          }]
        }
-     }]' <<< "${plan}")
+     }]' <<< "${plan}" > "${work}/change-set.json"
 
   if [ "${DRY_RUN:-0}" = 1 ]; then
-    jq . <<< "${change_set}"
+    jq . "${work}/change-set.json"
     exit 0
   fi
 
   id=$(catalog start-change-set \
     --change-set-name "${name_prefix}$(date -u +%Y%m%d.%H%M%S)" \
-    --change-set "${change_set}" | jq -r .ChangeSetId)
+    --change-set "file://${work}/change-set.json" | jq -r .ChangeSetId)
   echo "change set ${id}"
 
   # Instance type changes finish in under a minute.
@@ -184,7 +195,7 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
   fi
 
   invalid=$(invalid_types <<< "${result}" | jq -R . | jq -sc .)
-  others=$(jq '[.ChangeSet[].ErrorDetailList[]? | select(.ErrorCode != "INVALID_INSTANCE_TYPES")] | length' <<< "${result}")
+  others=$(jq "${refused}"' [.ChangeSet[].ErrorDetailList[]? | select([refused] == [])] | length' <<< "${result}")
   if [ "$(jq length <<< "${invalid}")" -eq 0 ] || [ "${others}" -gt 0 ]; then
     echo "::error::change set ${id} ${status}: $(jq -r .FailureCode <<< "${result}")"
     jq -r '.ChangeSet[].ErrorDetailList[]? | "\(.ErrorCode): \(.ErrorMessage)"' <<< "${result}"
