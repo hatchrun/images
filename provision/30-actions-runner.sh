@@ -18,5 +18,24 @@ curl -fsSL -o runner.tar.gz \
 echo "${sha256}  runner.tar.gz" | sha256sum --check --strict -
 tar -xzf runner.tar.gz
 rm runner.tar.gz
+
+# hatchrun-agent sends cache requests to its own proxy by renaming these
+# variables in the worker to ZCTIONS_*, and leaves the worker alone
+# unless each occurs exactly once. A runner release that moves or
+# duplicates one would quietly send every job back to GitHub's cache,
+# so it fails the build here. .NET keeps string literals in UTF-16LE.
+python3 - bin/Runner.Worker.dll <<'EOF'
+import sys
+
+dll = open(sys.argv[1], "rb").read()
+wrong = False
+for name in ("ACTIONS_CACHE_URL", "ACTIONS_RESULTS_URL", "ACTIONS_CACHE_SERVICE_V2"):
+    count = dll.count(name.encode("utf-16-le"))
+    print(f"{name} occurs {count} times in the runner worker")
+    wrong |= count != 1
+if wrong:
+    sys.exit("hatchrun-agent patches the runner only when each occurs exactly once")
+EOF
+
 ./bin/installdependencies.sh
 chown -R runner:runner /home/runner

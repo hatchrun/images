@@ -76,6 +76,17 @@ instance; the Ubuntu cloud image as provisioned took 71.
   instead of competing with it for the disk.
 - Services a single-job machine never uses are disabled.
 
+## Job cache
+
+For profiles with the `cache` extra, hatchrun-agent serves the GitHub
+cache from a proxy on the instance, backed by the tenant's S3 bucket.
+It points the runner at the proxy by renaming `ACTIONS_CACHE_URL`,
+`ACTIONS_RESULTS_URL` and `ACTIONS_CACHE_SERVICE_V2` in
+`bin/Runner.Worker.dll`, and only when each occurs exactly once. The
+build checks the same after installing the runner and fails otherwise,
+since a runner release that moves one would send every job back to
+GitHub's cache without an error.
+
 ## Security
 
 Before the AMI is made, Trivy scans the builder's own filesystem and is
