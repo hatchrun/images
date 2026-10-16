@@ -21,14 +21,15 @@ for product in "$@"; do
     --query 'ChangeSetSummaryList[].ChangeSetId' --output text)
   for id in ${ids}; do
     [ "${id}" = None ] && continue
-    # Details is the change as a JSON string; a change without an AMI,
-    # such as a listing edit, prints "-".
+    # Details is the change as a JSON string, an object for most changes
+    # and an array for some. A change without an AMI, such as a listing
+    # edit, prints "-".
     aws marketplace-catalog describe-change-set \
       --region us-east-1 \
       --catalog AWSMarketplace \
       --change-set-id "${id}" \
       --output json |
-      jq -r --arg id "${id}" '[.ChangeSet[].Details | fromjson
+      jq -r --arg id "${id}" '[.ChangeSet[].Details | fromjson | objects
         | .DeliveryOptions[]?.Details.AmiDeliveryOptionDetails.AmiSource.AmiId // empty]
         | if length == 0 then ["-"] else . end | .[] | "\($id) \(.)"'
   done
