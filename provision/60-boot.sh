@@ -83,13 +83,12 @@ UNIT
 install -m 0755 /dev/stdin /usr/local/libexec/hatchrun-prefetch <<'SCRIPT'
 #!/bin/sh
 # A volume made from a snapshot fetches each block from S3 the first
-# time it is read. The runner and Docker read their files one by one at
+# time it is read. Node and Docker read their files one by one at
 # start and took 15 and 20 seconds doing it. Reading the same files many
 # at a time fetches them far faster, in the order they are needed.
 prefetch() {
   find "$@" -type f -print0 2> /dev/null | xargs -0 -r -P 64 -n 16 cat > /dev/null 2>&1
 }
-prefetch /home/runner/bin
 prefetch /usr/bin/dockerd /usr/bin/containerd /usr/bin/containerd-shim-runc-v2 \
   /usr/bin/runc /usr/bin/docker /usr/libexec/docker
 prefetch /home/runner/externals
@@ -98,7 +97,7 @@ SCRIPT
 
 install -m 0644 /dev/stdin /etc/systemd/system/hatchrun-prefetch.service <<'UNIT'
 [Unit]
-Description=Read the runner and Docker files ahead of their start
+Description=Read the Node and Docker files ahead of their start
 DefaultDependencies=no
 After=local-fs.target
 

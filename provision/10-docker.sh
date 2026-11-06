@@ -23,9 +23,9 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 apt-get update
 apt-get -y install --no-install-recommends \
   docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-# At boot Docker took 20 seconds of disk reads away from the runner, and
+# At boot Docker took 20 seconds of disk reads away from the agent, and
 # started on first use it cost a job as much. It starts once the agent
-# has started instead, while the runner connects to GitHub, with its
+# has started instead, while the agent connects to hatchrun, with its
 # files already read by hatchrun-prefetch.service (60-boot.sh).
 install -d /etc/systemd/system/docker.service.d
 install -m 0644 /dev/stdin /etc/systemd/system/docker.service.d/10-after-agent.conf <<'UNIT'

@@ -11,7 +11,7 @@
 # one means the image is stale.
 #
 # Code that vendors ship inside their own releases, such as the Node.js
-# packages bundled with the GitHub runner or the Go libraries in Docker's
+# builds in /home/runner/externals or the Go libraries in Docker's
 # plugins, only changes with a new vendor release. Its fixable HIGH and
 # CRITICAL vulnerabilities are listed but do not fail the build; they also
 # reach GitHub code scanning through the SARIF upload.

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: AGPL-3.0-only
 
-# Ubuntu runner AMI. Packer boots the current Ubuntu cloud image, runs
+# Ubuntu CI AMI. Packer boots the current Ubuntu cloud image, runs
 # provision/*.sh over SSH, gates on the vulnerability scan and makes a
 # private AMI in the build region. AWS Marketplace copies it from there
 # and serves it in every region.
@@ -40,10 +40,6 @@ variable "ubuntu_release" {
   default = "26.04"
 }
 
-variable "runner_version" {
-  type = string
-}
-
 variable "agent_version" {
   type = string
 }
@@ -77,7 +73,7 @@ source "amazon-ebs" "ubuntu" {
   instance_type   = local.instance_type
   subnet_id       = var.subnet_id
   ami_name        = local.name
-  ami_description = "hatchrun runner, Ubuntu ${var.ubuntu_release} ${var.arch}, runner ${var.runner_version}, hatchrun-agent ${var.agent_version}"
+  ami_description = "hatchrun CI image, Ubuntu ${var.ubuntu_release} ${var.arch}, hatchrun-agent ${var.agent_version}"
 
   # SSH is open to this machine's public IP only, for the length of the
   # build, with a throwaway ed25519 key.
@@ -137,7 +133,7 @@ build {
       "${path.root}/../provision/00-base.sh",
       "${path.root}/../provision/10-docker.sh",
       "${path.root}/../provision/20-runner-user.sh",
-      "${path.root}/../provision/30-actions-runner.sh",
+      "${path.root}/../provision/30-node.sh",
       "${path.root}/../provision/40-hatchrun-agent.sh",
       "${path.root}/../provision/50-toolcache.sh",
       "${path.root}/../provision/60-boot.sh",

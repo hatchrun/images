@@ -11,7 +11,7 @@ set -euo pipefail
 #
 #   marketplace-version.sh PRODUCT_ID AMI_ID ARCH
 #
-# Reads IMAGE_VERSION, UBUNTU_RELEASE, RUNNER_VERSION, AGENT_VERSION and
+# Reads IMAGE_VERSION, UBUNTU_RELEASE, AGENT_VERSION and
 # ACCESS_ROLE_ARN (the role Marketplace ingests the AMI through) from the
 # environment. Set DRY_RUN=1 to validate the request without applying it.
 #
@@ -43,7 +43,6 @@ change_set=$(jq -n \
   --arg role "${ACCESS_ROLE_ARN}" \
   --arg version "${IMAGE_VERSION}" \
   --arg ubuntu "${UBUNTU_RELEASE}" \
-  --arg runner "${RUNNER_VERSION}" \
   --arg agent "${AGENT_VERSION}" \
   --arg instance_type "${instance_type}" \
   '[{
@@ -52,7 +51,7 @@ change_set=$(jq -n \
     DetailsDocument: {
       Version: {
         VersionTitle: $version,
-        ReleaseNotes: "Ubuntu \($ubuntu), GitHub Actions runner \($runner), hatchrun-agent \($agent). Release notes, SBOM and scan results: https://github.com/hatchrun/images/releases/tag/ubuntu26-\($version)"
+        ReleaseNotes: "Ubuntu \($ubuntu), hatchrun-agent \($agent). Release notes, SBOM and scan results: https://github.com/hatchrun/images/releases/tag/ubuntu26-\($version)"
       },
       DeliveryOptions: [{
         Details: {
@@ -64,7 +63,7 @@ change_set=$(jq -n \
               OperatingSystemName: "UBUNTU",
               OperatingSystemVersion: $ubuntu
             },
-            UsageInstructions: "The hatchrun scaler launches this AMI as an ephemeral GitHub Actions runner; it does nothing on its own. Setup: https://github.com/hatchrun/hatchrun#readme",
+            UsageInstructions: "hatchrun launches this AMI to run one CI job; it does nothing on its own. See https://github.com/hatchrun/hatchrun#readme",
             RecommendedInstanceType: $instance_type,
             SecurityGroups: [{
               IpProtocol: "tcp",

@@ -103,7 +103,6 @@ jobs:
             -var "arch=${ARCH}" \
             -var "region=${AWS_REGION}" \
             -var "image_version=${IMAGE_VERSION}" \
-            -var "runner_version=${RUNNER_VERSION}" \
             -var "agent_version=${AGENT_VERSION}" \
             -var "output_dir=out" \
             packer/
@@ -204,7 +203,7 @@ jobs:
           ACCESS_ROLE_ARN: ${{ secrets.MARKETPLACE_ACCESS_ROLE_ARN }}
         run: |
           . ./versions.env
-          export UBUNTU_RELEASE RUNNER_VERSION AGENT_VERSION
+          export UBUNTU_RELEASE AGENT_VERSION
           ami=$(jq -r '.builds[-1].artifact_id | split(":")[1]' "packer-manifest-${ARCH}.json")
           change_set=$(scripts/marketplace-version.sh "${PRODUCT}" "${ami}" "${ARCH}")
           echo "change_set=${change_set}" >> "$GITHUB_OUTPUT"
@@ -265,11 +264,10 @@ jobs:
           jq -n \
             --arg version "${IMAGE_VERSION}" \
             --arg ubuntu "${UBUNTU_RELEASE}" \
-            --arg runner "${RUNNER_VERSION}" \
             --arg agent "${AGENT_VERSION}" \
             --argjson amd64 "$(cat amis-amd64.json)" \
             --argjson arm64 "$(cat amis-arm64.json)" \
-            '{version: $version, ubuntu: $ubuntu, runner: $runner, agent: $agent,
+            '{version: $version, ubuntu: $ubuntu, agent: $agent,
               amis: {amd64: $amd64, arm64: $arm64}}' > manifest.json
           cat manifest.json
 
