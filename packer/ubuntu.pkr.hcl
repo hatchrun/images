@@ -54,8 +54,8 @@ variable "output_dir" {
 locals {
   # The agent version comes from versions.env alone, the file the
   # provisioners install from, so the description cannot name another.
-  agent_version = regex("(?m)^AGENT_VERSION=(\\S+)$", file("${path.root}/../versions.env"))[0]
-  name = "hatchrun-ubuntu${split(".", var.ubuntu_release)[0]}-${var.arch}-${var.image_version}"
+  agent_version = regex("(?m)^AGENT_VERSION=(\\S+)$", file("${abspath(path.root)}/../versions.env"))[0]
+  name          = "hatchrun-ubuntu${split(".", var.ubuntu_release)[0]}-${var.arch}-${var.image_version}"
   # Small instances keep a build at a few cents; the IAM role allows
   # only these types.
   instance_type = var.arch == "amd64" ? "c7i.large" : "c7g.large"
