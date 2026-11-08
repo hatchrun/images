@@ -40,10 +40,6 @@ variable "ubuntu_release" {
   default = "26.04"
 }
 
-variable "agent_version" {
-  type = string
-}
-
 variable "subnet_id" {
   type    = string
   default = ""
@@ -56,7 +52,10 @@ variable "output_dir" {
 }
 
 locals {
-  name = "hatchrun-ubuntu${split(".", var.ubuntu_release)[0]}-${var.arch}-${var.image_version}"
+  # The agent version comes from versions.env alone, the file the
+  # provisioners install from, so the description cannot name another.
+  agent_version = regex("(?m)^AGENT_VERSION=(\\S+)$", file("${abspath(path.root)}/../versions.env"))[0]
+  name          = "hatchrun-ubuntu${split(".", var.ubuntu_release)[0]}-${var.arch}-${var.image_version}"
   # Small instances keep a build at a few cents; the IAM role allows
   # only these types.
   instance_type = var.arch == "amd64" ? "c7i.large" : "c7g.large"
@@ -73,7 +72,7 @@ source "amazon-ebs" "ubuntu" {
   instance_type   = local.instance_type
   subnet_id       = var.subnet_id
   ami_name        = local.name
-  ami_description = "hatchrun CI image, Ubuntu ${var.ubuntu_release} ${var.arch}, hatchrun-agent ${var.agent_version}"
+  ami_description = "hatchrun CI image, Ubuntu ${var.ubuntu_release} ${var.arch}, hatchrun-agent ${local.agent_version}"
 
   # SSH is open to this machine's public IP only, for the length of the
   # build, with a throwaway ed25519 key.

@@ -7,8 +7,10 @@ GitHub hosted runners where workflows depend on it: the `runner` user
 Docker with Buildx, and preinstalled toolchains that `setup-*` actions pick
 up without downloading.
 
-Every build runs a compatibility suite of common actions and Docker
-workloads before the AMI is published. Images are rebuilt weekly and
+Every build scans the image for vulnerabilities before the AMI is
+published. Common actions and Docker workloads are checked by
+[hatchrun/smoke-test](https://github.com/hatchrun/smoke-test) against
+each release. Images are rebuilt weekly and
 published through AWS Marketplace, free, with an SBOM and a
 vulnerability scan: [amd64](https://aws.amazon.com/marketplace/pp/prodview-znhn62372z6jq)
 and [arm64](https://aws.amazon.com/marketplace/pp/prodview-nchg6i6uzlfr2).
@@ -31,8 +33,7 @@ build, with a throwaway key that is removed from the image.
 ```sh
 . ./versions.env
 packer init packer/
-packer build -var arch=arm64 -var image_version=$(date -u +%Y%m%d.%H%M) \
-  -var agent_version=$AGENT_VERSION packer/
+packer build -var arch=arm64 -var image_version=$(date -u +%Y%m%d.%H%M) packer/
 ```
 
 Every outside input is pinned in [`versions.env`](versions.env) or the
