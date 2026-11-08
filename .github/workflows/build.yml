@@ -103,7 +103,6 @@ jobs:
             -var "arch=${ARCH}" \
             -var "region=${AWS_REGION}" \
             -var "image_version=${IMAGE_VERSION}" \
-            -var "agent_version=${AGENT_VERSION}" \
             -var "output_dir=out" \
             packer/
 
