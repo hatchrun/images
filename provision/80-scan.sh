@@ -23,7 +23,10 @@ curl -fsSL -o "${work}/${archive}" \
 echo "${sha256}  ${work}/${archive}" | sha256sum --check --strict -
 tar -xzf "${work}/${archive}" -C "${work}" trivy
 
-TRIVY_DISABLE_TELEMETRY=true "${work}/trivy" rootfs \
+# Trivy downloads its Java database through the Go temp directory, which
+# is /tmp unless TMPDIR says otherwise; keep that on disk as well.
+install -d "${work}/tmp"
+TMPDIR="${work}/tmp" TRIVY_DISABLE_TELEMETRY=true "${work}/trivy" rootfs \
   --skip-version-check \
   --cache-dir "${work}/cache" \
   --scanners vuln \
