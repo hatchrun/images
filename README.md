@@ -10,16 +10,14 @@ up without downloading.
 Every build scans the image for vulnerabilities before the AMI is
 published. Common actions and Docker workloads are checked by
 [hatchrun/smoke-test](https://github.com/hatchrun/smoke-test) against
-each release. Images are rebuilt weekly and
-published through AWS Marketplace, free, with an SBOM and a
-vulnerability scan: [amd64](https://aws.amazon.com/marketplace/pp/prodview-znhn62372z6jq)
-and [arm64](https://aws.amazon.com/marketplace/pp/prodview-nchg6i6uzlfr2).
-An AWS account subscribes to each once before it can launch them. You
-can also build them in your own AWS account with the same pipeline.
+each release. Images are rebuilt weekly and released with an SBOM and
+a vulnerability scan. hatchrun CI launches them from the account that
+builds them. You can also build them in your own AWS account with the
+same pipeline.
 
-Status: early development. Marketplace serves the images in every
-region enabled by default; each release's `manifest.json` lists their
-ids.
+Status: early development. The build runs in us-east-1, where
+hatchrun CI launches runners; each release's `manifest.json` lists the
+AMI ids.
 
 ## Building
 
@@ -54,9 +52,9 @@ The image has:
 - no snapd, no unattended upgrades and no apt timers, so nothing changes
   the machine during a job.
 
-The root volume is 10 GB and unencrypted, so AWS Marketplace can copy
-the AMI.
-Set the size and encryption in your launch template.
+The root volume is 10 GB and unencrypted in the AMI. Set the size and
+encryption in your launch template; runners always launch with an
+encrypted volume.
 
 ## Boot
 
@@ -98,42 +96,32 @@ immutable ids. The role launches nothing but the two small builder
 instance types, in one region and with the build tag, and deletes only
 images and snapshots the build tagged.
 
-Each release lists the AMI id Marketplace serves in every region, per
-architecture, in `manifest.json`, with a build provenance attestation:
+Each release lists the AMI id hatchrun CI launches, per architecture,
+in `manifest.json`, with a build provenance attestation:
 
 ```sh
 gh attestation verify manifest.json --repo hatchrun/images
 ```
 
-## AWS Marketplace
+## Distribution
 
-AWS Marketplace is how the images are distributed. Each architecture is
-a product, because a product version holds a single AMI. Builds make a
-private AMI in us-east-1, the only region Marketplace takes source AMIs
-from, and submit it as a new version of its product
-([`scripts/marketplace-version.sh`](scripts/marketplace-version.sh)).
-Marketplace copies the AMI into its catalog through the
-`hatchrun-marketplace-ingestion` role, scans it and serves it in every
-region under the alias `/aws/service/marketplace/PRODUCT_ID/VERSION`.
-Once the scan passes, the build reads that alias in each region for the
-release ([`scripts/marketplace-amis.sh`](scripts/marketplace-amis.sh)).
-The build role may add versions and nothing else; creating, pricing and
-publishing the products stays a manual step in the Marketplace
-Management Portal.
+Builds make a private AMI in us-east-1 and record its id in the
+release. The build and the CI launcher run in the same AWS account, so
+no copy, sharing or subscription step is involved: `hatchrun-cloud`
+stores the AMI ids in its `images` table and `hatchrun-ci` launches
+from them.
 
-The `MARKETPLACE_PRODUCT_AMD64` and `MARKETPLACE_PRODUCT_ARM64`
-variables of the `image-build` environment hold the product ids. A build
-without them fails, as does a version Marketplace rejects or has not
-scanned within 3 hours.
+The images are not published publicly. To run them outside hatchrun,
+build the image in your own account with the pipeline above.
 
 ## Cost
 
-A build runs a c7i.large or c7g.large for about 20 minutes. Marketplace
-stores and serves the copies in every region, so the only storage the
-build account pays for is the source AMI in us-east-1. The workflow
-keeps the newest version per architecture and deregisters the rest with
-their snapshots ([`scripts/prune.sh`](scripts/prune.sh)).
-An image that fails the scan is never made or submitted.
+A build runs a c7i.large or c7g.large for about 20 minutes. The build
+account stores the AMIs it launches in us-east-1: the newest two
+versions per architecture, plus the AMIs of the previous release so it
+stays launchable for a rollback. The workflow deregisters older versions
+with their snapshots ([`scripts/prune.sh`](scripts/prune.sh)).
+An image that fails the scan is never made or released.
 
 ## Before you commit
 

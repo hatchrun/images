@@ -4,8 +4,8 @@
 
 # Ubuntu CI AMI. Packer boots the current Ubuntu cloud image, runs
 # provision/*.sh over SSH, gates on the vulnerability scan and makes a
-# private AMI in the build region. AWS Marketplace copies it from there
-# and serves it in every region.
+# private AMI in the build region. The release records it and hatchrun
+# CI launches it from this account.
 
 packer {
   required_version = "= 1.16.1"
@@ -88,8 +88,8 @@ source "amazon-ebs" "ubuntu" {
     http_put_response_hop_limit = 1
   }
 
-  # Unencrypted so AWS Marketplace can copy it. Launch templates encrypt
-  # each runner's copy and pick its size.
+  # Launch templates pick each runner's size and encrypt its copy. The
+  # AMI stays unencrypted so the launch template controls encryption.
   launch_block_device_mappings {
     device_name           = "/dev/sda1"
     volume_size           = 10
