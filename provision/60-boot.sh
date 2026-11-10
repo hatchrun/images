@@ -41,8 +41,8 @@ install -d -m 0755 /usr/local/libexec
 install -m 0755 /dev/stdin /usr/local/libexec/hatchrun-ssh-key <<'SCRIPT'
 #!/bin/sh
 # Installs the launch key pair's public key for the ubuntu user, so an
-# operator, and the AWS Marketplace scan, can log in. An instance
-# launched without a key pair gets no key.
+# operator can log in. An instance launched without a key pair gets no
+# key.
 set -eu
 imds=http://169.254.169.254
 token=$(curl -sf -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' "${imds}/latest/api/token")
